@@ -9,7 +9,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-const selfHost = "http://localhost:8081"
+const selfHost = "http://localhost:8080"
 
 var cache, _ = lru.New[string, string](1024)
 var flights = singleflight.Group{}
