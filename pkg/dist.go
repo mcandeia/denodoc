@@ -27,10 +27,10 @@ func md5Hash(text string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func useLocalHttpServer(importMap string) string {
-	return strings.ReplaceAll(importMap, "\"./\"", fmt.Sprintf("\"%s/\"", selfHost))
+func useLocalHttpServer(importMap, clientID string) string {
+	return strings.ReplaceAll(importMap, "\"./\"", fmt.Sprintf("\"%s/%s/\"", selfHost, clientID))
 }
-func ensureCreated(req *BeginDenoDocRequest) (*ImportMapEntry, error) {
+func ensureCreated(req *BeginDenoDocRequest, clientID string) (*ImportMapEntry, error) {
 	val, err, _ := mu.Do(req.ImportMap, func() (any, error) {
 		if val, ok := importMaps.Get(req.ImportMap); ok {
 			return val, nil
@@ -43,7 +43,7 @@ func ensureCreated(req *BeginDenoDocRequest) (*ImportMapEntry, error) {
 
 		importMapPath := filepath.Join(importMapDir, "import_map.json")
 
-		if err := os.WriteFile(importMapPath, []byte(useLocalHttpServer(req.ImportMap)), 0644); err != nil {
+		if err := os.WriteFile(importMapPath, []byte(useLocalHttpServer(req.ImportMap, clientID)), 0644); err != nil {
 			return nil, err
 		}
 

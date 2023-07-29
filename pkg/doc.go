@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 
@@ -31,6 +32,7 @@ type DenoDoc struct {
 	CWD       string
 	abortChan <-chan error
 	Storage   *Storage
+	basePath  string
 }
 
 func (d *DenoDoc) Run(req *DocRequest) (*DocResponse, error) {
@@ -50,15 +52,15 @@ func (d *DenoDoc) Run(req *DocRequest) (*DocResponse, error) {
 			return &DocResponse{Path: req.Path, DocNodes: cached}, nil
 		}
 
-		d.Storage.Set(req.Hash, req.Content)
+		d.Storage.Set(strings.Replace(req.Path, d.CWD+"/", "", 1), req.Content)
 
-		hashedPath := strings.Replace(req.Path, d.CWD, selfHost, 1) + "?hash=" + req.Hash + "&client_id=" + d.Storage.ClientID
+		hashedPath := strings.Replace(req.Path, d.CWD, d.basePath+"/", 1)
 		out, err := runDenoDoc(d.ImportMap.Path, hashedPath)
 		if err != nil {
 			return nil, err
 		}
 
-		docNodes := strings.ReplaceAll(out, selfHost, d.CWD)
+		docNodes := strings.ReplaceAll(out, d.basePath, d.CWD)
 		cache.Add(req.Hash, docNodes)
 		return &DocResponse{Path: req.Path, DocNodes: docNodes}, nil
 
@@ -75,5 +77,6 @@ func NewDenoDoc(importMap *ImportMapEntry, cwd string, st *Storage, abortChan <-
 		abortChan: abortChan,
 		CWD:       cwd,
 		Storage:   st,
+		basePath:  fmt.Sprintf("%s/%s", selfHost, st.ClientID),
 	}
 }

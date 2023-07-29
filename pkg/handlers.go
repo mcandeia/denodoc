@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
 )
@@ -19,6 +21,7 @@ type BeginDenoDocRequest struct {
 type DocResponse struct {
 	Path     string `json:"path"`
 	DocNodes string `json:"docNodes"`
+	Chal     bool   `json:"chal"`
 }
 
 type DocRequest struct {
@@ -70,11 +73,6 @@ func Marshal(obj any) ([]byte, error) {
 }
 func Handler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path[:3] != "/ws" {
-		if r.URL.RawQuery == "" {
-			w.WriteHeader(200)
-			w.Write([]byte("[]"))
-			return
-		}
 		serveDenoDoc(w, r)
 		return
 	}
@@ -105,19 +103,20 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		log.Println("first message err or invalid:", err)
 		return
 	}
-
-	importMap, err := ensureCreated(&firstMessage)
+	clientID := uuid.New().String()
+	importMap, err := ensureCreated(&firstMessage, clientID)
 	if err != nil {
 		log.Println("could not ensure created", err)
 		return
 	}
-	storage := NewStorage()
+	docRespChan := make(chan *DocResponse)
+	defer close(docRespChan)
+	storage := NewStorage(clientID, docRespChan)
 	defer storage.Close()
 
 	doc := NewDenoDoc(importMap, firstMessage.CWD, storage, abortChan)
 	waitAll := &sync.WaitGroup{}
-	docRespChan := make(chan *DocResponse)
-	defer close(docRespChan)
+
 	// send loop
 	go func() {
 		for {
@@ -161,7 +160,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 			resp, err := doc.Run(req)
 			if err != nil {
-				log.Println("denodoc err", err)
+				log.Println("denodoc err", err, req.Path)
 				return
 			}
 			docRespChan <- resp
@@ -170,17 +169,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	waitAll.Wait()
 }
 func serveDenoDoc(w http.ResponseWriter, r *http.Request) {
-	qs := r.URL.Query()
-	hash, clientId := qs.Get("hash"), qs.Get("client_id")
-	if hash == "" || clientId == "" {
+	parts := strings.SplitN(r.URL.Path, "/", 3)
+	if len(parts) < 3 {
+		log.Println("parts is less than 3", parts, r.URL.Path)
 		w.WriteHeader(400)
 		return
 	}
-	val, ok := GetFromStorage(clientId, hash)
-	if !ok {
-		w.WriteHeader(404)
+	val := GetFromStorage(parts[1], parts[2])
+	if val == nil {
+		log.Println("NOT EXISTS", r.URL.Path)
+		w.WriteHeader(200)
+		w.Write([]byte("[]"))
 		return
 	}
 	w.WriteHeader(200)
-	w.Write([]byte(val))
+	w.Write([]byte(val.Get()))
 }
