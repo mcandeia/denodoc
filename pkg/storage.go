@@ -1,7 +1,6 @@
 package pkg
 
 import (
-	"log"
 	"sync"
 )
 
@@ -55,9 +54,7 @@ func (s *Storage) GetOrCreate(path string) *SharedContent {
 	if val, ok := s.values[path]; ok {
 		return val
 	}
-	log.Println("SEND CHAL", path)
 	s.chalChan <- &DocResponse{Path: path, Chal: true}
-	log.Println("CHAL SENT", path)
 	c := NewSharedContent()
 	s.values[path] = c
 	return c
