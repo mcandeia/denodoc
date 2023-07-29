@@ -1,41 +1,36 @@
 package pkg
 
 import (
+	"log"
 	"sync"
 )
 
-type CachedContent struct {
-	inner  chan string
-	cached string
-	mu     *sync.RWMutex
+type SharedContent struct {
+	value string
+	cond  *sync.Cond
 }
 
-func (c *CachedContent) Get() string {
-	c.mu.RLock()
-	if c.cached != "" {
-		c.mu.RUnlock()
-		return c.cached
+func (s *SharedContent) Get() string {
+	s.cond.L.Lock()
+	defer s.cond.L.Unlock()
+	if s.value != "" {
+		return s.value
 	}
-	c.mu.RUnlock()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cached != "" {
-		return c.cached
-	}
-	c.cached = <-c.inner
-	return c.cached
+	s.cond.Wait()
+	return s.value
 }
-func (c *CachedContent) Set(val string) {
-	c.inner <- val
-	close(c.inner)
+func (s *SharedContent) Set(value string) {
+	s.cond.L.Lock()
+	defer s.cond.L.Unlock()
+	s.value = value
+	s.cond.Broadcast()
+
 }
-
-func NewCachedContent() *CachedContent {
-	return &CachedContent{
-		inner: make(chan string, 1),
-		mu:    &sync.RWMutex{},
+func NewSharedContent() *SharedContent {
+	m := sync.Mutex{}
+	return &SharedContent{
+		cond: sync.NewCond(&m),
 	}
-
 }
 
 var clients = make(map[string]*Storage)
@@ -43,12 +38,12 @@ var clientsMu = sync.RWMutex{}
 
 type Storage struct {
 	ClientID string
-	values   map[string]*CachedContent
+	values   map[string]*SharedContent
 	mu       *sync.RWMutex
 	chalChan chan *DocResponse
 }
 
-func (s *Storage) GetOrCreate(path string) *CachedContent {
+func (s *Storage) GetOrCreate(path string) *SharedContent {
 	s.mu.RLock()
 	if val, ok := s.values[path]; ok {
 		s.mu.RUnlock()
@@ -60,8 +55,10 @@ func (s *Storage) GetOrCreate(path string) *CachedContent {
 	if val, ok := s.values[path]; ok {
 		return val
 	}
+	log.Println("SEND CHAL", path)
 	s.chalChan <- &DocResponse{Path: path, Chal: true}
-	c := NewCachedContent()
+	log.Println("CHAL SENT", path)
+	c := NewSharedContent()
 	s.values[path] = c
 	return c
 }
@@ -80,7 +77,7 @@ func (s *Storage) Set(path string, content string) {
 		curr.Set(content)
 		return
 	}
-	c := NewCachedContent()
+	c := NewSharedContent()
 	s.values[path] = c
 	c.Set(content)
 }
@@ -95,7 +92,7 @@ func NewStorage(clientID string, chalChan chan *DocResponse) *Storage {
 	storage := &Storage{
 		chalChan: chalChan,
 		ClientID: clientID,
-		values:   make(map[string]*CachedContent),
+		values:   make(map[string]*SharedContent),
 		mu:       &sync.RWMutex{},
 	}
 	clientsMu.Lock()
@@ -104,7 +101,7 @@ func NewStorage(clientID string, chalChan chan *DocResponse) *Storage {
 	return storage
 }
 
-func GetFromStorage(clientID, reqPath string) *CachedContent {
+func GetFromStorage(clientID, reqPath string) *SharedContent {
 	clientsMu.RLock()
 	defer clientsMu.RUnlock()
 	client, ok := clients[clientID]

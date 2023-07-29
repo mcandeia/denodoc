@@ -33,6 +33,7 @@ type DenoDoc struct {
 	abortChan <-chan error
 	Storage   *Storage
 	basePath  string
+	limiter   chan struct{}
 }
 
 func (d *DenoDoc) Run(req *DocRequest) (*DocResponse, error) {
@@ -54,7 +55,7 @@ func (d *DenoDoc) Run(req *DocRequest) (*DocResponse, error) {
 
 		d.Storage.Set(strings.Replace(req.Path, d.CWD+"/", "", 1), req.Content)
 
-		hashedPath := strings.Replace(req.Path, d.CWD, d.basePath+"/", 1)
+		hashedPath := strings.Replace(req.Path, d.CWD, d.basePath, 1)
 		out, err := runDenoDoc(d.ImportMap.Path, hashedPath)
 		if err != nil {
 			return nil, err
@@ -78,5 +79,6 @@ func NewDenoDoc(importMap *ImportMapEntry, cwd string, st *Storage, abortChan <-
 		CWD:       cwd,
 		Storage:   st,
 		basePath:  fmt.Sprintf("%s/%s", selfHost, st.ClientID),
+		limiter:   make(chan struct{}, 10),
 	}
 }

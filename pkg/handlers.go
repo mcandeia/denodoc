@@ -28,6 +28,7 @@ type DocRequest struct {
 	Path    string `json:"path"`
 	Content string `json:"content,omitempty"`
 	Hash    string `json:"hash,omitempty"`
+	Chal    bool   `json:"chal,omitempty"`
 }
 
 // Create a writer that caches compressors.
@@ -71,6 +72,7 @@ func Marshal(obj any) ([]byte, error) {
 	}
 	return Compress(bts), nil
 }
+
 func Handler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path[:3] != "/ws" {
 		serveDenoDoc(w, r)
@@ -115,7 +117,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	defer storage.Close()
 
 	doc := NewDenoDoc(importMap, firstMessage.CWD, storage, abortChan)
-	waitAll := &sync.WaitGroup{}
 
 	// send loop
 	go func() {
@@ -141,30 +142,37 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 		}
 	}()
+	docReqChan := make(chan *DocRequest)
+	defer close(docReqChan)
+
+	waitAll := &sync.WaitGroup{}
+	go func() {
+		for req := range docReqChan {
+			waitAll.Add(1)
+			go func(req *DocRequest) {
+				defer waitAll.Done()
+				resp, err := doc.Run(req)
+				if err != nil {
+					log.Println("denodoc err", err, req.Path)
+					return
+				}
+				docRespChan <- resp
+			}(req)
+		}
+	}()
 	// recv loop
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("read err:", err)
+			abortChan <- fmt.Errorf("read err: %v", err)
 			break
 		}
 		var req = &DocRequest{}
 		if err := Unmarshal(message, req); err != nil {
-			log.Println("could not unmarshal:", err)
+			abortChan <- fmt.Errorf("could not unmarshal: %v", err)
 			break
 		}
-
-		waitAll.Add(1)
-		go func() {
-			defer waitAll.Done()
-
-			resp, err := doc.Run(req)
-			if err != nil {
-				log.Println("denodoc err", err, req.Path)
-				return
-			}
-			docRespChan <- resp
-		}()
+		docReqChan <- req
 	}
 	waitAll.Wait()
 }
@@ -175,6 +183,7 @@ func serveDenoDoc(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
+
 	val := GetFromStorage(parts[1], parts[2])
 	if val == nil {
 		log.Println("NOT EXISTS", r.URL.Path)
@@ -182,6 +191,7 @@ func serveDenoDoc(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("[]"))
 		return
 	}
+	content := val.Get()
 	w.WriteHeader(200)
-	w.Write([]byte(val.Get()))
+	w.Write([]byte(content))
 }
