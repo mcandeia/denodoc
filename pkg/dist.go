@@ -43,7 +43,7 @@ func ensureCreated(req *BeginDenoDocRequest) (*ImportMapEntry, error) {
 
 		importMapPath := filepath.Join(importMapDir, "import_map.json")
 
-		if err := os.WriteFile(filepath.Join(importMapDir, "import_map.json"), []byte(useLocalHttpServer(req.ImportMap)), 0644); err != nil {
+		if err := os.WriteFile(importMapPath, []byte(useLocalHttpServer(req.ImportMap)), 0644); err != nil {
 			return nil, err
 		}
 
