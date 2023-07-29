@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -59,6 +60,14 @@ func Unmarshal(msg []byte, obj any) error {
 	return json.Unmarshal(decompressed, obj)
 }
 
+func Marshal(obj any) ([]byte, error) {
+	bts, err := json.Marshal(obj)
+	if err != nil {
+		log.Println("marshal err", err)
+		return nil, err
+	}
+	return Compress(bts), nil
+}
 func Handler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path[:3] != "/ws" {
 		if r.URL.RawQuery == "" {
@@ -75,28 +84,25 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	abortChan := make(chan error, 1)
+	defer close(abortChan)
 	closeHandler := conn.CloseHandler()
+	defer conn.Close()
+
 	conn.SetCloseHandler(func(code int, text string) error {
 		err := closeHandler(code, text)
 		abortChan <- err
 		return err
 	})
-	defer conn.Close()
 
-	_, message, err := conn.ReadMessage()
+	mt, message, err := conn.ReadMessage()
 	if err != nil {
 		log.Println("read:", err)
 		return
 	}
 
 	var firstMessage = BeginDenoDocRequest{}
-	if err := Unmarshal(message, &firstMessage); err != nil {
-		log.Println("read:", err)
-		return
-	}
-
-	if firstMessage.CWD == "" {
-		log.Println("first message is empty")
+	if err := Unmarshal(message, &firstMessage); err != nil || firstMessage.CWD == "" {
+		log.Println("first message err or invalid:", err)
 		return
 	}
 
@@ -109,21 +115,47 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	defer storage.Close()
 
 	doc := NewDenoDoc(importMap, firstMessage.CWD, storage, abortChan)
-	mu := &sync.Mutex{}
-
 	waitAll := &sync.WaitGroup{}
+	docRespChan := make(chan *DocResponse)
+	defer close(docRespChan)
+	// send loop
+	go func() {
+		for {
+			select {
+			case err := <-abortChan:
+				if err != nil {
+					log.Println(fmt.Sprintf("aborting send loop err %v", err))
+				}
+				return
+			case resp := <-docRespChan:
+				bts, err := Marshal(resp)
+				if err != nil {
+					abortChan <- fmt.Errorf("error when marshalling resp %v", err)
+					return
+				}
+
+				if err := conn.WriteMessage(mt, bts); err != nil {
+					abortChan <- fmt.Errorf("error when writing message %v", err)
+					return
+				}
+			}
+
+		}
+	}()
+	// recv loop
 	for {
-		mt, message, err := conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("read err:", err)
 			break
 		}
-		waitAll.Add(1)
 		var req = &DocRequest{}
 		if err := Unmarshal(message, req); err != nil {
 			log.Println("could not unmarshal:", err)
 			break
 		}
+
+		waitAll.Add(1)
 		go func() {
 			defer waitAll.Done()
 
@@ -132,17 +164,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				log.Println("denodoc err", err)
 				return
 			}
-			bts, err := json.Marshal(resp)
-			if err != nil {
-				log.Println("marshal err", err)
-				return
-			}
-			compressed := Compress(bts)
-			mu.Lock()
-			defer mu.Unlock()
-			if err := conn.WriteMessage(mt, compressed); err != nil {
-				log.Println("write message err", err)
-			}
+			docRespChan <- resp
 		}()
 	}
 	waitAll.Wait()
